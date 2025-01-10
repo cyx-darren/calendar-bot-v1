@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -6,172 +6,167 @@ from googleapiclient.discovery import build
 import os
 import pickle
 from datetime import datetime, timedelta
+import sys
 
 app = Flask(__name__)
+app.debug = True
+
+# Enable HTTPS traffic for OAuth
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-# Get the Replit URL from environment
-REPLIT_URL = os.getenv('REPLIT_URL', '')  # You'll need to set this in Replit secrets
+def print_debug(message):
+    """Helper function to ensure debug messages are printed"""
+    print(message, file=sys.stderr, flush=True)
 
-# Update the create_flow function in your main.py
 def create_flow():
-    """Create OAuth2 flow instance."""
-    redirect_uri = "https://calendar-bot-1-darren8.replit.app/oauth2callback"  # Hardcode for now
-    flow = Flow.from_client_secrets_file(
-        'credentials.json',
-        scopes=SCOPES,
-        redirect_uri=redirect_uri
-    )
-    return flow
-
-def get_calendar_service():
-    """Gets Google Calendar service with proper authentication."""
-    creds = None
-
-    # Load saved credentials from token.pickle
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-
-    # If credentials are invalid or don't exist, redirect to auth
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            return None
-
-        # Save credentials for next run
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-
-    return build('calendar', 'v3', credentials=creds)
-
-class CalendarBot:
-    def __init__(self):
-        self.service = get_calendar_service()
-
-    def add_event(self, title, start_time, end_time, description="", location="", attendees=None):
-        """Add a new event to Google Calendar."""
-        event = {
-            'summary': title,
-            'location': location,
-            'description': description,
-            'start': {
-                'dateTime': start_time.isoformat(),
-                'timeZone': 'UTC',
-            },
-            'end': {
-                'dateTime': end_time.isoformat(),
-                'timeZone': 'UTC',
-            }
-        }
-
-        if attendees:
-            event['attendees'] = [{'email': email} for email in attendees]
-
-        event = self.service.events().insert(
-            calendarId='primary',
-            body=event,
-            sendUpdates='all'
-        ).execute()
-
-        return event
-
-    def get_upcoming_events(self, days=7):
-        """Get upcoming events for the next specified days."""
-        now = datetime.utcnow()
-        time_max = now + timedelta(days=days)
-
-        events_result = self.service.events().list(
-            calendarId='primary',
-            timeMin=now.isoformat() + 'Z',
-            timeMax=time_max.isoformat() + 'Z',
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-
-        return events_result.get('items', [])
-
-# Initialize bot (will be None until authenticated)
-bot = None
+    """Create OAuth2 flow instance with debug logging."""
+    print_debug("Creating OAuth flow")
+    redirect_uri = "https://calendar-bot-1-darren8.replit.app/oauth2callback"
+    try:
+        flow = Flow.from_client_secrets_file(
+            'credentials.json',
+            scopes=SCOPES,
+            redirect_uri=redirect_uri
+        )
+        print_debug("OAuth flow created successfully")
+        return flow
+    except Exception as e:
+        print_debug(f"Error creating flow: {str(e)}")
+        raise
 
 @app.route('/')
 def home():
-    """Home page and auth check."""
-    global bot
+    """Home page and auth check with debug logging."""
+    print_debug("\n=== Checking Authentication ===")
+    print_debug(f"Current directory: {os.getcwd()}")
+    print_debug(f"Files in directory: {os.listdir()}")
+
+    if os.path.exists('token.pickle'):
+        print_debug("token.pickle exists")
+        try:
+            with open('token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+                print_debug("Successfully loaded credentials from token.pickle")
+                return 'Calendar Bot is running and authenticated!'
+        except Exception as e:
+            print_debug(f"Error loading token.pickle: {str(e)}")
+    else:
+        print_debug("token.pickle does not exist")
 
     if not os.path.exists('credentials.json'):
-        return 'Error: credentials.json file not found. Please upload it to Replit.'
+        print_debug("credentials.json not found")
+        return 'Error: credentials.json file not found'
 
-    if bot is None or bot.service is None:
+    try:
         flow = create_flow()
-        auth_url = flow.authorization_url()
-        return f'<a href="{auth_url[0]}">Click here to authorize with Google Calendar</a>'
-
-    return 'Calendar Bot is running and authenticated!'
+        auth_url, _ = flow.authorization_url(access_type='offline', include_granted_scopes='true')
+        return f'<a href="{auth_url}">Click here to authorize with Google Calendar</a>'
+    except Exception as e:
+        error_msg = f"Error creating authorization URL: {str(e)}"
+        print_debug(error_msg)
+        return error_msg
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    """Handle the OAuth2 callback from Google."""
-    global bot
+    """Handle the OAuth2 callback with detailed logging."""
+    print_debug("\n=== OAuth Callback Started ===")
 
-    flow = create_flow()
-    flow.fetch_token(
-        authorization_response=request.url,
-        code=request.args.get('code')
-    )
+    try:
+        print_debug("Creating flow")
+        flow = create_flow()
 
-    credentials = flow.credentials
-    with open('token.pickle', 'wb') as token:
-        pickle.dump(credentials, token)
+        print_debug("Fetching token")
+        flow.fetch_token(
+            authorization_response=request.url
+        )
 
-    bot = CalendarBot()
-    return 'Successfully authenticated! You can close this window.'
+        print_debug("Token fetched successfully")
+        credentials = flow.credentials
+
+        print_debug("Attempting to save token.pickle")
+        try:
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(credentials, token)
+            print_debug("token.pickle saved successfully")
+        except Exception as e:
+            print_debug(f"Error saving token.pickle: {str(e)}")
+            raise
+
+        print_debug("Checking if token.pickle was created")
+        if os.path.exists('token.pickle'):
+            size = os.path.getsize('token.pickle')
+            print_debug(f"token.pickle exists, size: {size} bytes")
+        else:
+            print_debug("token.pickle was not created")
+
+        return 'Successfully authenticated! You can close this window.'
+
+    except Exception as e:
+        error_msg = f"Error in OAuth callback: {str(e)}"
+        print_debug(error_msg)
+        return error_msg
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle incoming webhook requests."""
-    global bot
+    print_debug("\n=== Webhook Request Received ===")
 
-    print("Webhook request received")  # Debug print
-
-    if bot is None or bot.service is None:
-        print("Bot not authenticated")  # Debug print
+    if not os.path.exists('token.pickle'):
+        print_debug("No token.pickle found - not authenticated")
         return jsonify({'status': 'error', 'message': 'Bot not authenticated'}), 401
 
     try:
         data = request.get_json()
-        print(f"Received data: {data}")  # Debug print
+        print_debug(f"Received webhook data: {data}")
 
-        action = data.get('action')
-        print(f"Action: {action}")  # Debug print
+        # Load credentials
+        with open('token.pickle', 'rb') as token:
+            credentials = pickle.load(token)
 
-        if action == 'add_event':
-            details = data['eventDetails']
-            print(f"Event details: {details}")  # Debug print
+        service = build('calendar', 'v3', credentials=credentials)
 
-            start_time = datetime.fromisoformat(details['startDate'].replace('Z', ''))
-            end_time = datetime.fromisoformat(details['endDate'].replace('Z', ''))
+        # Process the event
+        if data['action'] == 'add_event':
+            event_details = data['eventDetails']
 
-            event = bot.add_event(
-                title=details['title'],
-                start_time=start_time,
-                end_time=end_time,
-                description=details.get('description', ''),
-                location=details.get('location', ''),
-                attendees=[a['email'] for a in details.get('attendees', [])]
-            )
-            return jsonify({'status': 'success', 'event': event})
+            event = {
+                'summary': event_details['title'],
+                'description': event_details.get('description', ''),
+                'start': {
+                    'dateTime': event_details['startDate'],
+                    'timeZone': 'UTC',
+                },
+                'end': {
+                    'dateTime': event_details['endDate'],
+                    'timeZone': 'UTC',
+                }
+            }
 
-        # Add this else block to handle invalid actions
-        else:
-            print(f"Invalid action: {action}")  # Debug print
-            return jsonify({'status': 'error', 'message': 'Invalid action'}), 400
+            # Add attendees if provided
+            if 'attendees' in event_details:
+                event['attendees'] = event_details['attendees']
+
+            created_event = service.events().insert(
+                calendarId='primary',
+                body=event,
+                sendUpdates='all'
+            ).execute()
+
+            print_debug(f"Event created: {created_event}")
+            return jsonify({
+                'status': 'success',
+                'event': created_event
+            })
+
+        return jsonify({'status': 'error', 'message': 'Invalid action'}), 400
 
     except Exception as e:
-        print(f"Error processing webhook: {str(e)}")  # Debug print
+        print_debug(f"Error in webhook: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-app.run(host='0.0.0.0', port=8080)
+if __name__ == "__main__":
+    print_debug("Starting Calendar Bot...")
+    app.run(host='0.0.0.0', port=8080)

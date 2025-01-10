@@ -1,19 +1,4 @@
-# Ignore Google OAuth credentials
 credentials.json
 token.pickle
-
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Environment variables
-.env
-.venv
-env/
-venv/
-ENV/
-
-# IDE
-.vscode/
-.idea/
+*.pyc
